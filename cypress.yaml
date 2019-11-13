@@ -1,0 +1,81 @@
+# This example demonstrates the ability to pass artifacts
+# from one step to the next.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: cypress-
+
+# TODO: Use a dameon for nginx.
+# TODO: Work out how to use inputs.artifacts to receive the spec-reports.
+
+spec:
+  entrypoint: run-tests
+  templates:
+    - name: run-tests
+      dag:
+        tasks:
+          - name: extract-specs
+            template: glob-specs
+          - name: run-spec
+            dependencies: [extract-specs]
+            template: generate-spec-report
+            arguments:
+              parameters:
+                - name: spec
+                  value: "{{item}}"
+            withParam: "{{tasks.extract-specs.outputs.result}}"
+          - name: produce-spec-report
+            dependencies: [run-spec]
+            template: aggregate-spec-reports
+
+    - name: glob-specs
+      script:
+        image: node:lts-alpine
+        command: [node]
+        source: |
+          const cp = require('child_process');
+          const specs = cp.execSync("find . -name '*.conf'").toString();
+          console.log(
+            JSON.stringify(
+              specs.split('\n').filter(Boolean)
+            )
+          );
+
+    - name: generate-spec-report
+      inputs:
+        parameters:
+          - name: spec
+      container:
+        image: docker/whalesay:latest
+        command: [sh, -c]
+        args:
+          [
+            "cowsay {{inputs.parameters.spec}} | tee /tmp/spec-report-{{workflow.name}}.txt",
+          ]
+      outputs:
+        artifacts:
+          - name: spec-report
+            path: /tmp/spec-report-{{workflow.name}}.txt
+            archive:
+              none: {}
+
+    - name: aggregate-spec-reports
+      inputs:
+        artifacts:
+          - name: myfile
+            path: /tmp/myfile
+            s3:
+              key: "{{workspace.name}}" # cypress-fgng5/
+              bucket: new-bucket
+              endpoint: argo-artifacts-minio:9000
+              insecure: true
+              accessKeySecret:
+                name: argo-artifacts-minio
+                key: accesskey
+              secretKeySecret:
+                name: argo-artifacts-minio
+                key: secretkey
+      container:
+        image: docker/whalesay:latest
+        command: [sh, -c]
+        args: ["cowsay 'Hello World!' && cat /tmp/myfile/**/*"]
