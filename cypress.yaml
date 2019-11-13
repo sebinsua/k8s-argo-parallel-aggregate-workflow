@@ -6,10 +6,19 @@ metadata:
   generateName: cypress-
 
 # TODO: Use a dameon for nginx.
-# TODO: Work out how to use inputs.artifacts to receive the spec-reports.
 
 spec:
   entrypoint: run-tests
+
+  volumeClaimTemplates:
+    - metadata:
+        name: spec-reports
+      spec:
+        accessModes: ["ReadWriteMany"]
+        resources:
+          requests:
+            storage: 1Gi
+
   templates:
     - name: run-tests
       dag:
@@ -50,32 +59,24 @@ spec:
         command: [sh, -c]
         args:
           [
-            "cowsay {{inputs.parameters.spec}} | tee /tmp/spec-report-{{workflow.name}}.txt",
+            "cowsay {{inputs.parameters.spec}} | tee /e2e/spec-reports/spec-report-{{pod.name}}.txt",
           ]
-      outputs:
-        artifacts:
-          - name: spec-report
-            path: /tmp/spec-report-{{workflow.name}}.txt
-            archive:
-              none: {}
+        volumeMounts:
+          - name: spec-reports
+            mountPath: /e2e/spec-reports
 
     - name: aggregate-spec-reports
-      inputs:
-        artifacts:
-          - name: myfile
-            path: /tmp/myfile
-            s3:
-              key: "{{workspace.name}}" # cypress-fgng5/
-              bucket: new-bucket
-              endpoint: argo-artifacts-minio:9000
-              insecure: true
-              accessKeySecret:
-                name: argo-artifacts-minio
-                key: accesskey
-              secretKeySecret:
-                name: argo-artifacts-minio
-                key: secretkey
       container:
-        image: docker/whalesay:latest
+        image: alpine:latest
         command: [sh, -c]
-        args: ["cowsay 'Hello World!' && cat /tmp/myfile/**/*"]
+        args: ["cat /e2e/spec-reports/* > /tmp/aggregated-spec-report.txt"]
+        volumeMounts:
+          - name: spec-reports
+            mountPath: /e2e/spec-reports
+      outputs:
+        artifacts:
+          - name: aggregated-spec-report
+            globalName: aggregated-spec-report
+            path: /tmp/aggregated-spec-report.txt
+            archive:
+              none: {}
