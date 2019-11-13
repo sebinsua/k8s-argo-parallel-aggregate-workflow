@@ -5,8 +5,6 @@ kind: Workflow
 metadata:
   generateName: cypress-
 
-# TODO: Use a dameon for nginx.
-
 spec:
   entrypoint: run-tests
 
@@ -23,19 +21,34 @@ spec:
     - name: run-tests
       dag:
         tasks:
+          - name: nginx-server
+            template: nginx-server
           - name: extract-specs
             template: glob-specs
           - name: run-spec
-            dependencies: [extract-specs]
+            dependencies: [nginx-server, extract-specs]
             template: generate-spec-report
             arguments:
               parameters:
+                - name: nginx-server-ip
+                  value: "{{tasks.nginx-server.ip}}"
                 - name: spec
                   value: "{{item}}"
             withParam: "{{tasks.extract-specs.outputs.result}}"
           - name: produce-spec-report
             dependencies: [run-spec]
             template: aggregate-spec-reports
+
+    - name: nginx-server
+      daemon: true
+      container:
+        image: nginx:latest
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 2
+          timeoutSeconds: 1
 
     - name: glob-specs
       script:
@@ -53,13 +66,14 @@ spec:
     - name: generate-spec-report
       inputs:
         parameters:
+          - name: nginx-server-ip
           - name: spec
       container:
-        image: docker/whalesay:latest
+        image: byrnedo/alpine-curl:latest
         command: [sh, -c]
         args:
           [
-            "cowsay {{inputs.parameters.spec}} | tee /e2e/spec-reports/spec-report-{{pod.name}}.txt",
+            'curl http://{{inputs.parameters.nginx-server-ip}}:80 && echo "{{inputs.parameters.spec}} ($(echo -n {{inputs.parameters.spec}} | wc -m | xargs))" | tee /e2e/spec-reports/spec-report-{{pod.name}}.txt',
           ]
         volumeMounts:
           - name: spec-reports
