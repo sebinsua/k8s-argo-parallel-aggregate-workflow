@@ -3,14 +3,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  generateName: cypress-
+  generateName: parallel-aggregate-workflow-
 
 spec:
-  entrypoint: run-tests
+  entrypoint: run-parallel-aggregate-workflow
 
   volumeClaimTemplates:
     - metadata:
-        name: spec-reports
+        name: results
       spec:
         accessModes: ["ReadWriteMany"]
         resources:
@@ -18,26 +18,26 @@ spec:
             storage: 1Gi
 
   templates:
-    - name: run-tests
+    - name: run-parallel-aggregate-workflow
       dag:
         tasks:
           - name: nginx-server
             template: nginx-server
-          - name: extract-specs
-            template: glob-specs
-          - name: run-spec
-            dependencies: [nginx-server, extract-specs]
-            template: generate-spec-report
+          - name: extract-files
+            template: glob-files
+          - name: run-file
+            dependencies: [nginx-server, extract-files]
+            template: compute-result
             arguments:
               parameters:
                 - name: nginx-server-ip
                   value: "{{tasks.nginx-server.ip}}"
-                - name: spec
+                - name: file
                   value: "{{item}}"
-            withParam: "{{tasks.extract-specs.outputs.result}}"
-          - name: produce-spec-report
-            dependencies: [run-spec]
-            template: aggregate-spec-reports
+            withParam: "{{tasks.extract-files.outputs.result}}"
+          - name: produce-aggregate-results
+            dependencies: [run-file]
+            template: aggregate-results
 
     - name: nginx-server
       daemon: true
@@ -50,47 +50,47 @@ spec:
           initialDelaySeconds: 2
           timeoutSeconds: 1
 
-    - name: glob-specs
+    - name: glob-files
       script:
         image: node:lts-alpine
         command: [node]
         source: |
           const cp = require('child_process');
-          const specs = cp.execSync("find . -name '*.conf'").toString();
+          const files = cp.execSync("find . -name '*.conf'").toString();
           console.log(
             JSON.stringify(
-              specs.split('\n').filter(Boolean)
+              files.split('\n').filter(Boolean)
             )
           );
 
-    - name: generate-spec-report
+    - name: compute-result
       inputs:
         parameters:
           - name: nginx-server-ip
-          - name: spec
+          - name: file
       container:
         image: byrnedo/alpine-curl:latest
         command: [sh, -c]
         args:
           [
-            'curl http://{{inputs.parameters.nginx-server-ip}}:80 && echo "{{inputs.parameters.spec}} ($(echo -n {{inputs.parameters.spec}} | wc -m | xargs))" | tee /e2e/spec-reports/spec-report-{{pod.name}}.txt',
+            'curl http://{{inputs.parameters.nginx-server-ip}}:80 && echo "{{inputs.parameters.file}} ($(echo -n {{inputs.parameters.file}} | wc -m | xargs))" | tee /results/result-{{pod.name}}.txt',
           ]
         volumeMounts:
-          - name: spec-reports
-            mountPath: /e2e/spec-reports
+          - name: results
+            mountPath: /results
 
-    - name: aggregate-spec-reports
+    - name: aggregate-results
       container:
         image: alpine:latest
         command: [sh, -c]
-        args: ["cat /e2e/spec-reports/* > /tmp/aggregated-spec-report.txt"]
+        args: ["cat /results/* > /tmp/aggregated-results.txt"]
         volumeMounts:
-          - name: spec-reports
-            mountPath: /e2e/spec-reports
+          - name: results
+            mountPath: /results
       outputs:
         artifacts:
-          - name: aggregated-spec-report
-            globalName: aggregated-spec-report
-            path: /tmp/aggregated-spec-report.txt
+          - name: aggregated-results
+            globalName: aggregated-results
+            path: /tmp/aggregated-results.txt
             archive:
               none: {}
